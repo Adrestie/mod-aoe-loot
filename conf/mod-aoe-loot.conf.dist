@@ -1,0 +1,61 @@
+#
+# mod-aoe-loot configuration
+#
+
+[worldserver]
+
+########################################
+# Area loot
+########################################
+#
+#    AoeLoot.Enable
+#        Description: Clicking a corpse also opens the loot of the other
+#                     corpses around it that the player may loot.
+#        Default:     1 - Enabled
+#                     0 - Disabled: every corpse is looted on its own
+#
+
+AoeLoot.Enable = 1
+
+#
+#    AoeLoot.Range
+#        Description: How far from the player, in yards, the other corpses
+#                     may lie. Retail has no published value.
+#        Range:       5.5 to 100
+#        Default:     30
+#
+
+AoeLoot.Range = 30
+
+#
+#    AoeLoot.MaxCorpses
+#        Description: How many corpses one window draws from, the clicked one
+#                     included; the nearest are taken first. The others wait
+#                     for another click.
+#        Range:       1 to 50
+#        Default:     15
+#
+
+AoeLoot.MaxCorpses = 15
+
+#
+#    AoeLoot.MaxItems
+#        Description: How many rows one window holds. The rows past it stay
+#                     on their corpses for another click. The 3.3.5 client is
+#                     believed to hold 16; raise it only after checking in game
+#                     that more show.
+#        Range:       1 to 255
+#        Default:     16
+#
+
+AoeLoot.MaxItems = 16
+
+#
+#    AoeLoot.LineOfSight
+#        Description: Leave out the corpses the player cannot see, behind a
+#                     wall or a floor.
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+
+AoeLoot.LineOfSight = 1

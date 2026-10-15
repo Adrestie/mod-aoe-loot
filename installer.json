@@ -1,0 +1,11 @@
+{
+  "format": "wow-mods-installer/1",
+  "module": "mod-aoe-loot",
+  "title": "AoE Loot",
+  "fields": {"worldserver": "required", "sources": "required"},
+  "signature": ["src/aoe_loot_loader.cpp", "src/AoeLoot.cpp"],
+  "configuration": {
+    "file": "mod-aoe-loot.conf",
+    "template": "conf/mod-aoe-loot.conf.dist"
+  }
+}
