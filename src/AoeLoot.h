@@ -41,9 +41,10 @@ class WorldSession;
  *
  * The clicked corpse is opened by the core itself (Player::SendLoot), so its
  * rights, its rolls and its round robin are the core's. Its answer is held
- * back, the rows of the other corpses are added to it, and the merged window
- * is sent in its place. Every row is numbered again from 0, so the client
- * never sees a slot number above what one corpse could have.
+ * back, and the window is drawn again from every corpse it covers -- the
+ * same item from several corpses stacked on one row -- and sent in its place.
+ * Every row is numbered again from 0, so the client never sees a slot number
+ * above what one corpse could have.
  */
 
 struct AoeLootConfig
@@ -59,12 +60,21 @@ struct AoeLootConfig
 
 AoeLootConfig& sAoeLootConfig();
 
-// One row of the merged window: where it comes from.
-struct AoeLootRow
+// A share of a row: one corpse's own row, with the slot it has there.
+struct AoeLootPart
 {
     ObjectGuid source;
     uint8 sourceSlot = 0;
+    bool taken = false;
+};
+
+// One row of the merged window. The same item dropped by several corpses
+// shows once, its counts added up to a full stack; each corpse's share stays
+// on that corpse until it is taken.
+struct AoeLootRow
+{
     uint32 itemId = 0;
+    std::vector<AoeLootPart> parts;
     bool taken = false;
 };
 
@@ -79,6 +89,8 @@ struct AoeLootState : public DataMap::Base
     std::vector<ObjectGuid> moneySources;
     // the rows, by slot of the merged window
     std::vector<AoeLootRow> rows;
+    // the loot type the core answered the clicked corpse with
+    uint8 lootType = 0;
     bool active = false;
 
     // set while the core opens the clicked corpse: its answer is held back
@@ -95,6 +107,7 @@ struct AoeLootState : public DataMap::Base
         secondaries.clear();
         moneySources.clear();
         rows.clear();
+        lootType = 0;
         active = false;
         capturing = false;
         captured.reset();

@@ -291,17 +291,112 @@ namespace
         return creature;
     }
 
-    // Whether a row has left the window for this player.
-    bool IsRowGone(Player* player, Loot& loot, AoeLootRow const& row)
+    // Whether a corpse's share of a row has left it for this player.
+    bool IsPartGone(Player* player, Loot& loot, AoeLootPart const& part, uint32 itemId)
     {
         QuestItem* questItem = nullptr;
         QuestItem* ffaItem = nullptr;
         QuestItem* conditionalItem = nullptr;
-        LootItem* item = loot.LootItemInSlot(row.sourceSlot, player, &questItem, &ffaItem, &conditionalItem);
-        if (!item || item->is_looted || item->itemid != row.itemId)
+        LootItem* item = loot.LootItemInSlot(part.sourceSlot, player, &questItem, &ffaItem, &conditionalItem);
+        if (!item || item->is_looted || item->itemid != itemId)
             return true;
 
         return (questItem && questItem->is_looted) || (ffaItem && ffaItem->is_looted) || (conditionalItem && conditionalItem->is_looted);
+    }
+
+    // Rows that may share a line: the same item, with the same random
+    // property, both free for the player to take. Rolls, master loot and
+    // locked rows keep one line per corpse, as each is decided on its own.
+    bool CanStack(WireRow const& a, WireRow const& b)
+    {
+        if (a.itemId != b.itemId || a.randomSuffix != b.randomSuffix || a.randomPropertyId != b.randomPropertyId)
+            return false;
+
+        if (a.slotType != b.slotType || (a.slotType != LOOT_SLOT_TYPE_ALLOW_LOOT && a.slotType != LOOT_SLOT_TYPE_OWNER))
+            return false;
+
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(a.itemId);
+        return proto && a.count + b.count <= proto->GetMaxStackSize();
+    }
+
+    // Draws the window again from every corpse it covers, as each would show
+    // itself to the player now, and sends it.
+    void SendWindow(Player* player, AoeLootState& state)
+    {
+        state.rows.clear();
+        state.moneySources.clear();
+
+        std::vector<WireRow> shown;
+        QuestLimit questLimit(player);
+        uint32 gold = 0;
+        uint32 maxItems = sAoeLootConfig().maxItems;
+
+        std::vector<ObjectGuid> sources;
+        sources.push_back(state.primary);
+        sources.insert(sources.end(), state.secondaries.begin(), state.secondaries.end());
+
+        for (ObjectGuid const& guid : sources)
+        {
+            Creature* creature = player->GetMap()->GetCreature(guid);
+            if (!creature || creature->IsAlive())
+                continue;
+
+            PermissionTypes permission = PermissionFor(player, creature);
+            if (permission == NONE_PERMISSION)
+                continue;
+
+            ByteBuffer view;
+            view << LootView(creature->loot, player, permission);
+            WireLoot corpseLoot = ReadLootView(view);
+
+            if (corpseLoot.gold)
+            {
+                gold += corpseLoot.gold;
+                state.moneySources.push_back(guid);
+            }
+
+            for (WireRow const& row : corpseLoot.rows)
+            {
+                if (!questLimit.Allows(row))
+                    continue;
+
+                AoeLootPart part{ guid, row.slot, false };
+
+                auto stack = std::find_if(shown.begin(), shown.end(), [&row](WireRow const& other) { return CanStack(other, row); });
+                if (stack != shown.end())
+                {
+                    stack->count += row.count;
+                    state.rows[stack - shown.begin()].parts.push_back(part);
+                    continue;
+                }
+
+                // a full window: the row waits on its corpse
+                if (shown.size() >= maxItems)
+                    continue;
+
+                shown.push_back(row);
+                state.rows.push_back({ row.itemId, { part }, false });
+            }
+        }
+
+        WorldPacket data(SMSG_LOOT_RESPONSE, 8 + 1 + 4 + 1 + shown.size() * 22);
+        data << state.primary;
+        data << uint8(state.lootType);
+        data << uint32(gold);
+        data << uint8(shown.size());
+        for (std::size_t i = 0; i < shown.size(); ++i)
+        {
+            WireRow const& row = shown[i];
+            data << uint8(i);
+            data << uint32(row.itemId);
+            data << uint32(row.count);
+            data << uint32(row.displayId);
+            data << uint32(row.randomSuffix);
+            data << int32(row.randomPropertyId);
+            data << uint8(row.slotType);
+        }
+
+        player->SendDirectMessage(&data);
     }
 
     // What WorldSession::DoLootRelease does to a creature's loot, without its
@@ -408,81 +503,21 @@ bool AoeLoot::HandleLoot(Player* player, ObjectGuid guid)
         return true;
     }
 
-    WireLoot clickedLoot = ReadLootView(answer);
-
     // the player looks at the merged window, not at the clicked corpse's:
     // the core's notices about it carry its own slot numbers
     clicked->loot.RemoveLooter(player->GetGUID());
 
     state->primary = guid;
+    state->lootType = lootType;
     state->active = true;
-
-    QuestLimit questLimit(player);
-    std::vector<WireRow> rows;
-    uint32 gold = clickedLoot.gold;
-
-    if (clickedLoot.gold)
-        state->moneySources.push_back(guid);
-
-    for (WireRow const& row : clickedLoot.rows)
-    {
-        if (!questLimit.Allows(row))
-            continue;
-
-        rows.push_back(row);
-        state->rows.push_back({ guid, row.slot, row.itemId, false });
-    }
 
     for (Creature* creature : others)
     {
-        if (rows.size() >= config.maxItems)
-            break;
-
-        PermissionTypes permission = PermissionFor(player, creature);
         OpenCorpse(player, creature);
         state->secondaries.push_back(creature->GetGUID());
-
-        ByteBuffer view;
-        view << LootView(creature->loot, player, permission);
-        WireLoot corpseLoot = ReadLootView(view);
-
-        if (corpseLoot.gold)
-        {
-            gold += corpseLoot.gold;
-            state->moneySources.push_back(creature->GetGUID());
-        }
-
-        for (WireRow const& row : corpseLoot.rows)
-        {
-            if (rows.size() >= config.maxItems)
-                break;
-
-            if (!questLimit.Allows(row))
-                continue;
-
-            rows.push_back(row);
-            state->rows.push_back({ creature->GetGUID(), row.slot, row.itemId, false });
-        }
     }
 
-    WorldPacket merged(SMSG_LOOT_RESPONSE, 8 + 1 + 4 + 1 + rows.size() * 22);
-    merged << guid;
-    merged << uint8(lootType);
-    merged << uint32(gold);
-    merged << uint8(rows.size());
-    for (std::size_t i = 0; i < rows.size(); ++i)
-    {
-        WireRow const& row = rows[i];
-        merged << uint8(i);
-        merged << uint32(row.itemId);
-        merged << uint32(row.count);
-        merged << uint32(row.displayId);
-        merged << uint32(row.randomSuffix);
-        merged << int32(row.randomPropertyId);
-        merged << uint8(row.slotType);
-    }
-
-    player->SendDirectMessage(&merged);
+    SendWindow(player, *state);
     return true;
 }
 
@@ -504,26 +539,45 @@ bool AoeLoot::HandleTakeItem(Player* player, uint8 slot)
         return true;
     }
 
+    // each corpse's share is taken from its corpse, until the bags are full
     AoeLootRow& row = state->rows[slot];
-    Creature* source = SourceCorpse(player, *state, row.source);
-    if (!source)
+    bool tookSome = false;
+    bool reached = false;
+
+    for (AoeLootPart& part : row.parts)
     {
-        player->SendLootError(state->primary, LOOT_ERROR_TOO_FAR);
-        return true;
+        if (part.taken)
+            continue;
+
+        Creature* source = SourceCorpse(player, *state, part.source);
+        if (!source)
+            continue;
+
+        reached = true;
+        sScriptMgr->OnPlayerAfterCreatureLoot(player);
+
+        InventoryResult result;
+        state->muteRemovals = true;
+        player->StoreLootItem(part.sourceSlot, &source->loot, result);
+        state->muteRemovals = false;
+
+        if (!IsPartGone(player, source->loot, part, row.itemId))
+            break;
+
+        part.taken = true;
+        tookSome = true;
     }
 
-    sScriptMgr->OnPlayerAfterCreatureLoot(player);
-
-    InventoryResult result;
-    state->muteRemovals = true;
-    player->StoreLootItem(row.sourceSlot, &source->loot, result);
-    state->muteRemovals = false;
-
-    if (IsRowGone(player, source->loot, row))
+    if (std::all_of(row.parts.begin(), row.parts.end(), [](AoeLootPart const& part) { return part.taken; }))
     {
         row.taken = true;
         player->SendNotifyLootItemRemoved(slot);
     }
+    // part of the stack went: the window shows what is left of it
+    else if (tookSome)
+        SendWindow(player, *state);
+    else if (!reached)
+        player->SendLootError(state->primary, LOOT_ERROR_TOO_FAR);
 
     return true;
 }
@@ -652,11 +706,13 @@ bool AoeLoot::HandleMasterGive(Player* player, ObjectGuid lootGuid, uint8 slot, 
         return true;
     }
 
-    if (slot >= state->rows.size() || state->rows[slot].taken)
+    // master loot rows never stack: one row, one corpse
+    if (slot >= state->rows.size() || state->rows[slot].taken || state->rows[slot].parts.size() != 1)
         return true;
 
     AoeLootRow& row = state->rows[slot];
-    Creature* source = SourceCorpse(player, *state, row.source);
+    AoeLootPart& part = row.parts.front();
+    Creature* source = SourceCorpse(player, *state, part.source);
     if (!source)
     {
         player->SendLootError(lootGuid, LOOT_ERROR_TOO_FAR);
@@ -664,10 +720,10 @@ bool AoeLoot::HandleMasterGive(Player* player, ObjectGuid lootGuid, uint8 slot, 
     }
 
     Loot* loot = &source->loot;
-    if (row.sourceSlot >= loot->items.size() + loot->quest_items.size())
+    if (part.sourceSlot >= loot->items.size() + loot->quest_items.size())
         return true;
 
-    LootItem& item = row.sourceSlot >= loot->items.size() ? loot->quest_items[row.sourceSlot - loot->items.size()] : loot->items[row.sourceSlot];
+    LootItem& item = part.sourceSlot >= loot->items.size() ? loot->quest_items[part.sourceSlot - loot->items.size()] : loot->items[part.sourceSlot];
     if (item.is_looted || item.itemid != row.itemId)
         return true;
 
@@ -699,9 +755,10 @@ bool AoeLoot::HandleMasterGive(Player* player, ObjectGuid lootGuid, uint8 slot, 
 
     // the others looking at that corpse, with its own slot; the master
     // looter, with the window's
-    loot->NotifyItemRemoved(row.sourceSlot);
+    loot->NotifyItemRemoved(part.sourceSlot);
     --loot->unlootedCount;
 
+    part.taken = true;
     row.taken = true;
     player->SendNotifyLootItemRemoved(slot);
     return true;

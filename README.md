@@ -23,6 +23,9 @@ game.** See [What to check in game](#what-to-check-in-game).
 - **Quest items, not more than needed.** Each corpse alone only knows what your
   bags hold; the window also counts what the other corpses offer, and stops
   offering a quest item once your quests have what they ask for.
+- **Stacked.** The same item from several corpses shows on one row, its
+  counts added up to a full stack: 2 bones here and 3 there make one row of
+  5. Rolls, master loot and locked rows keep one row per corpse.
 - **What you leave stays.** Nothing moves between corpses: each row of the
   window points at the corpse it came from, and taking it takes it from there.
   A row you leave, or one your full bags refuse, stays on its corpse.
@@ -89,6 +92,8 @@ to `configs/modules/mod-aoe-loot.conf`, rebuild the core.
 - Alone, several corpses: one window; leave an item, close, and find it again
   on the corpse it dropped from.
 - Full bags: what does not fit stays on its corpse.
+- Stacking: 2 bones on one corpse and 3 on another show as one row of 5;
+  with room for only part of it, the row goes down to what is left.
 - A monster tagged by a player outside the group, among yours: not in the
   window.
 - In a group: your click does not take a teammate's quest items or held items;
